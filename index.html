@@ -177,10 +177,69 @@
       padding: 4px;
     }
     footer button:disabled { color: var(--muted); opacity: .5; }
+
+    /* Хедер з кнопкою виходу */
+    header { display: flex; align-items: center; justify-content: space-between; }
+    .logout {
+      background: rgba(255,255,255,.22);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .logout:active { opacity: .8; }
+    .logout[hidden] { display: none; }
+
+    /* Екран входу */
+    .login-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px calc(env(safe-area-inset-right) + 24px) 24px calc(env(safe-area-inset-left) + 24px);
+    }
+    .login-card { text-align: center; max-width: 320px; }
+    .login-emoji { font-size: 64px; line-height: 1; }
+    .login-card h2 { margin: 14px 0 6px; color: var(--text); font-size: 22px; }
+    .login-card p { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
+    .google-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: #fff;
+      color: #1f1f1f;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 24px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0,0,0,.12);
+    }
+    .google-btn:active { opacity: .85; }
   </style>
 </head>
 <body>
-  <header><h1>🛒 Список</h1></header>
+  <div id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="login-emoji">🛒</div>
+      <h2>Список покупок</h2>
+      <p>Увійди, щоб бачити свій список</p>
+      <button id="loginBtn" class="google-btn">Увійти через Google</button>
+    </div>
+  </div>
+
+  <header>
+    <h1>🛒 Список</h1>
+    <button id="logoutBtn" class="logout" hidden>Вийти</button>
+  </header>
 
   <form class="add-bar" id="addForm">
     <input id="newItem" type="text" placeholder="Що купити?" autocomplete="off"
@@ -205,9 +264,13 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
     import {
       initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-      collection, query, orderBy, onSnapshot,
+      collection, query, orderBy, onSnapshot, setDoc,
       addDoc, updateDoc, deleteDoc, doc, getDocs, where, writeBatch, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+    import {
+      initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, browserPopupRedirectResolver,
+      GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut
+    } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
 
     // --- Firebase (web-конфіг публічний за дизайном; захист — у Security Rules) ---
     const firebaseConfig = {
@@ -219,16 +282,20 @@
       appId: "1:252207791118:web:75386133625cca6480905f"
     };
     const app = initializeApp(firebaseConfig);
-    // Firestore з офлайн-кешем (IndexedDB)
     const db = initializeFirestore(app, {
       localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
     });
-
-    // Поки один спільний список. На Етапі 3 LIST_ID стане індивідуальним для групи.
-    const LIST_ID = 'family';
-    const itemsCol = collection(db, 'lists', LIST_ID, 'items');
+    // Persistence через IndexedDB (надійніше для standalone-PWA на iOS)
+    const auth = initializeAuth(app, {
+      persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+      popupRedirectResolver: browserPopupRedirectResolver
+    });
+    const provider = new GoogleAuthProvider();
 
     // --- DOM ---
+    const loginScreen = document.getElementById('loginScreen');
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
     const listEl = document.getElementById('list');
     const emptyEl = document.getElementById('empty');
     const counterEl = document.getElementById('counter');
@@ -236,7 +303,9 @@
     const form = document.getElementById('addForm');
     const input = document.getElementById('newItem');
 
-    let items = [];   // { id, text, done, createdAt }
+    let items = [];           // { id, text, done, createdAt }
+    let itemsCol = null;      // колекція пунктів поточного користувача
+    let unsubscribe = null;   // відписка від realtime-слухача
 
     const CHECK_SVG =
       '<svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" ' +
@@ -244,7 +313,6 @@
 
     function render() {
       listEl.innerHTML = '';
-      // items уже відсортовані за createdAt; додатково: невиконані згори, куплені внизу
       const sorted = [...items].sort((a, b) => Number(a.done) - Number(b.done));
       for (const it of sorted) {
         const li = document.createElement('li');
@@ -273,19 +341,52 @@
       return 'пунктів';
     }
 
-    // --- Realtime: слухаємо хмару, рендеримо при кожній зміні (свої й чужі) ---
-    onSnapshot(query(itemsCol, orderBy('createdAt')),
-      snap => {
-        items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // --- Авторизація ---
+    loginBtn.addEventListener('click', () => {
+      signInWithRedirect(auth, provider);
+    });
+    logoutBtn.addEventListener('click', () => {
+      signOut(auth);
+    });
+
+    // Обробка повернення після redirect-входу (важливо для iOS standalone)
+    getRedirectResult(auth).catch(err => console.error('redirect:', err));
+
+    onAuthStateChanged(auth, async user => {
+      if (user) {
+        loginScreen.style.display = 'none';
+        logoutBtn.hidden = false;
+        await startForUser(user);
+      } else {
+        loginScreen.style.display = 'flex';
+        logoutBtn.hidden = true;
+        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+        itemsCol = null;
+        items = [];
         render();
-      },
-      err => console.error('Firestore onSnapshot:', err)
-    );
+      }
+    });
+
+    async function startForUser(user) {
+      const listRef = doc(db, 'lists', user.uid);
+      // Гарантуємо існування власного списку (учасник — лише ти).
+      // Етап 4: коли з'являться запрошені, members не можна перезаписувати — переробити.
+      try {
+        await setDoc(listRef, { ownerId: user.uid, members: [user.uid] }, { merge: true });
+      } catch (e) { console.error('ensureList:', e); }
+
+      itemsCol = collection(db, 'lists', user.uid, 'items');
+      if (unsubscribe) unsubscribe();
+      unsubscribe = onSnapshot(query(itemsCol, orderBy('createdAt')),
+        snap => { items = snap.docs.map(d => ({ id: d.id, ...d.data() })); render(); },
+        err => console.error('onSnapshot:', err)
+      );
+    }
 
     // --- Дії: пишемо в хмару, realtime сам оновить UI на всіх пристроях ---
     async function addItem(text) {
       text = text.trim();
-      if (!text) return;
+      if (!text || !itemsCol) return;
       try {
         await addDoc(itemsCol, { text, done: false, createdAt: serverTimestamp() });
       } catch (e) { console.error('addItem:', e); }
@@ -300,7 +401,7 @@
 
     listEl.addEventListener('click', e => {
       const actEl = e.target.closest('[data-act]');
-      if (!actEl) return;
+      if (!actEl || !itemsCol) return;
       const li = e.target.closest('li');
       const id = li && li.dataset.id;
       if (!id) return;
@@ -314,6 +415,7 @@
     });
 
     clearBtn.addEventListener('click', async () => {
+      if (!itemsCol) return;
       try {
         const doneSnap = await getDocs(query(itemsCol, where('done', '==', true)));
         const batch = writeBatch(db);
