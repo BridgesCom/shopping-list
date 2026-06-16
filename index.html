@@ -269,7 +269,7 @@
     } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
     import {
       initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, browserPopupRedirectResolver,
-      GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut
+      GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut
     } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
 
     // --- Firebase (web-конфіг публічний за дизайном; захист — у Security Rules) ---
@@ -342,8 +342,15 @@
     }
 
     // --- Авторизація ---
-    loginBtn.addEventListener('click', () => {
-      signInWithRedirect(auth, provider);
+    loginBtn.addEventListener('click', async () => {
+      // Спершу popup (надійніше для standalone-PWA на iOS), відкат на redirect, якщо заблоковано.
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (err) {
+        console.error('popup-вхід не вдався, пробую redirect:', err && err.code);
+        try { await signInWithRedirect(auth, provider); }
+        catch (e) { console.error('redirect-вхід:', e && e.code); }
+      }
     });
     logoutBtn.addEventListener('click', () => {
       signOut(auth);
