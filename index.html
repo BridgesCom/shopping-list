@@ -201,8 +201,34 @@
     <button id="clearDone" disabled>Очистити куплене</button>
   </footer>
 
-  <script>
-    const STORAGE_KEY = 'spysok.items.v1';
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+    import {
+      initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+      collection, query, orderBy, onSnapshot,
+      addDoc, updateDoc, deleteDoc, doc, getDocs, where, writeBatch, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+
+    // --- Firebase (web-конфіг публічний за дизайном; захист — у Security Rules) ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyAnwNQRaj3eoFppY_WHh9Ux_mUuFYOsBJg",
+      authDomain: "shop-list-4c6ae.firebaseapp.com",
+      projectId: "shop-list-4c6ae",
+      storageBucket: "shop-list-4c6ae.firebasestorage.app",
+      messagingSenderId: "252207791118",
+      appId: "1:252207791118:web:75386133625cca6480905f"
+    };
+    const app = initializeApp(firebaseConfig);
+    // Firestore з офлайн-кешем (IndexedDB)
+    const db = initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+    });
+
+    // Поки один спільний список. На Етапі 3 LIST_ID стане індивідуальним для групи.
+    const LIST_ID = 'family';
+    const itemsCol = collection(db, 'lists', LIST_ID, 'items');
+
+    // --- DOM ---
     const listEl = document.getElementById('list');
     const emptyEl = document.getElementById('empty');
     const counterEl = document.getElementById('counter');
@@ -210,20 +236,7 @@
     const form = document.getElementById('addForm');
     const input = document.getElementById('newItem');
 
-    let items = load();
-
-    function load() {
-      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-      catch { return []; }
-    }
-    function save() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    }
-    function uid() {
-      return (self.crypto && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : String(Date.now()) + Math.random().toString(36).slice(2);
-    }
+    let items = [];   // { id, text, done, createdAt }
 
     const CHECK_SVG =
       '<svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" ' +
@@ -231,7 +244,7 @@
 
     function render() {
       listEl.innerHTML = '';
-      // невиконані згори, виконані внизу
+      // items уже відсортовані за createdAt; додатково: невиконані згори, куплені внизу
       const sorted = [...items].sort((a, b) => Number(a.done) - Number(b.done));
       for (const it of sorted) {
         const li = document.createElement('li');
@@ -260,11 +273,22 @@
       return 'пунктів';
     }
 
-    function addItem(text) {
+    // --- Realtime: слухаємо хмару, рендеримо при кожній зміні (свої й чужі) ---
+    onSnapshot(query(itemsCol, orderBy('createdAt')),
+      snap => {
+        items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        render();
+      },
+      err => console.error('Firestore onSnapshot:', err)
+    );
+
+    // --- Дії: пишемо в хмару, realtime сам оновить UI на всіх пристроях ---
+    async function addItem(text) {
       text = text.trim();
       if (!text) return;
-      items.push({ id: uid(), text, done: false });
-      save(); render();
+      try {
+        await addDoc(itemsCol, { text, done: false, createdAt: serverTimestamp() });
+      } catch (e) { console.error('addItem:', e); }
     }
 
     form.addEventListener('submit', e => {
@@ -280,24 +304,25 @@
       const li = e.target.closest('li');
       const id = li && li.dataset.id;
       if (!id) return;
-      const act = actEl.dataset.act;
-      if (act === 'toggle') {
-        const it = items.find(i => i.id === id);
-        if (it) { it.done = !it.done; save(); render(); }
-      } else if (act === 'del') {
-        items = items.filter(i => i.id !== id);
-        save(); render();
+      const it = items.find(i => i.id === id);
+      if (!it) return;
+      if (actEl.dataset.act === 'toggle') {
+        updateDoc(doc(itemsCol, id), { done: !it.done }).catch(err => console.error('toggle:', err));
+      } else if (actEl.dataset.act === 'del') {
+        deleteDoc(doc(itemsCol, id)).catch(err => console.error('del:', err));
       }
     });
 
-    clearBtn.addEventListener('click', () => {
-      items = items.filter(i => !i.done);
-      save(); render();
+    clearBtn.addEventListener('click', async () => {
+      try {
+        const doneSnap = await getDocs(query(itemsCol, where('done', '==', true)));
+        const batch = writeBatch(db);
+        doneSnap.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      } catch (e) { console.error('clearDone:', e); }
     });
 
-    render();
-
-    // Реєстрація service worker (офлайн)
+    // Service worker (офлайн-оболонка)
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./service-worker.js').catch(() => {});
