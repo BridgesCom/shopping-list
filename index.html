@@ -56,8 +56,11 @@
       position: sticky;
       top: 0;
       z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
-    header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: .2px; }
 
     /* Форма додавання */
     .add-bar {
@@ -178,8 +181,35 @@
     }
     footer button:disabled { color: var(--muted); opacity: .5; }
 
-    /* Хедер з кнопкою виходу */
-    header { display: flex; align-items: center; justify-content: space-between; }
+    /* Перемикач списків + кнопки в хедері */
+    .list-picker {
+      background: rgba(255,255,255,.18);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 16px;
+      font-weight: 700;
+      max-width: 55%;
+      -webkit-appearance: none;
+      appearance: none;
+      cursor: pointer;
+    }
+    .list-picker option { color: #1c1c22; }
+    .header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+    .hbtn {
+      background: rgba(255,255,255,.22);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .hbtn:active { opacity: .8; }
+    .hbtn[hidden] { display: none; }
+
     .logout {
       background: rgba(255,255,255,.22);
       color: #fff;
@@ -192,6 +222,32 @@
     }
     .logout:active { opacity: .8; }
     .logout[hidden] { display: none; }
+
+    /* Банер запрошення */
+    .join-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #eef0ff;
+      color: #1c1c22;
+      border-bottom: 1px solid var(--line);
+      font-size: 15px;
+    }
+    @media (prefers-color-scheme: dark) { .join-banner { background: #23234a; color: #f2f2f5; } }
+    .join-banner[hidden] { display: none; }
+    .join-banner button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 9px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
 
     /* Екран входу */
     .login-screen {
@@ -237,9 +293,17 @@
   </div>
 
   <header>
-    <h1>🛒 Список</h1>
-    <button id="logoutBtn" class="logout" hidden>Вийти</button>
+    <select id="listPicker" class="list-picker" aria-label="Вибір списку"></select>
+    <div class="header-actions">
+      <button id="shareBtn" class="hbtn" hidden>Поділитися</button>
+      <button id="logoutBtn" class="logout" hidden>Вийти</button>
+    </div>
   </header>
+
+  <div id="joinBanner" class="join-banner" hidden>
+    <span>Вас запросили до спільного списку.</span>
+    <button id="joinBtn">Приєднатися</button>
+  </div>
 
   <form class="add-bar" id="addForm">
     <input id="newItem" type="text" placeholder="Що купити?" autocomplete="off"
@@ -264,7 +328,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
     import {
       initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-      collection, query, orderBy, onSnapshot, setDoc,
+      collection, query, orderBy, onSnapshot, setDoc, arrayUnion,
       addDoc, updateDoc, deleteDoc, doc, getDocs, where, writeBatch, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
     import {
@@ -285,7 +349,6 @@
     const db = initializeFirestore(app, {
       localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
     });
-    // Persistence через IndexedDB (надійніше для standalone-PWA на iOS)
     const auth = initializeAuth(app, {
       persistence: [indexedDBLocalPersistence, browserLocalPersistence],
       popupRedirectResolver: browserPopupRedirectResolver
@@ -296,6 +359,10 @@
     const loginScreen = document.getElementById('loginScreen');
     const loginBtn = document.getElementById('loginBtn');
     const logoutBtn = document.getElementById('logoutBtn');
+    const shareBtn = document.getElementById('shareBtn');
+    const listPicker = document.getElementById('listPicker');
+    const joinBanner = document.getElementById('joinBanner');
+    const joinBtn = document.getElementById('joinBtn');
     const listEl = document.getElementById('list');
     const emptyEl = document.getElementById('empty');
     const counterEl = document.getElementById('counter');
@@ -303,9 +370,20 @@
     const form = document.getElementById('addForm');
     const input = document.getElementById('newItem');
 
-    let items = [];           // { id, text, done, createdAt }
-    let itemsCol = null;      // колекція пунктів поточного користувача
-    let unsubscribe = null;   // відписка від realtime-слухача
+    let currentUser = null;
+    let myLists = [];          // [{ id, ownerId, ownerName, members }]
+    let activeListId = null;
+    let items = [];            // { id, text, done, createdAt }
+    let itemsCol = null;
+    let unsubItems = null;     // відписка від слухача пунктів
+    let unsubLists = null;     // відписка від слухача списків
+    let pendingJoin = null;    // listId із ?join=
+
+    // Прочитати запрошення з URL
+    (() => {
+      const j = new URLSearchParams(location.search).get('join');
+      if (j) pendingJoin = j;
+    })();
 
     const CHECK_SVG =
       '<svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" ' +
@@ -341,9 +419,38 @@
       return 'пунктів';
     }
 
+    // --- Перемикач списків ---
+    function listLabel(l) {
+      if (currentUser && l.id === currentUser.uid) return 'Мій список';
+      return l.ownerName ? ('Список: ' + l.ownerName) : 'Спільний список';
+    }
+    function renderPicker() {
+      listPicker.innerHTML = '';
+      for (const l of myLists) {
+        const opt = document.createElement('option');
+        opt.value = l.id;
+        opt.textContent = listLabel(l);
+        listPicker.appendChild(opt);
+      }
+      if (activeListId) listPicker.value = activeListId;
+    }
+
+    function setActiveList(listId) {
+      if (!listId) return;
+      activeListId = listId;
+      if (myLists.some(l => l.id === listId)) listPicker.value = listId;
+      if (unsubItems) { unsubItems(); unsubItems = null; }
+      itemsCol = collection(db, 'lists', listId, 'items');
+      unsubItems = onSnapshot(query(itemsCol, orderBy('createdAt')),
+        snap => { items = snap.docs.map(d => ({ id: d.id, ...d.data() })); render(); },
+        err => console.error('items onSnapshot:', err)
+      );
+    }
+
+    listPicker.addEventListener('change', () => setActiveList(listPicker.value));
+
     // --- Авторизація ---
     loginBtn.addEventListener('click', async () => {
-      // Спершу popup (надійніше для standalone-PWA на iOS), відкат на redirect, якщо заблоковано.
       try {
         await signInWithPopup(auth, provider);
       } catch (err) {
@@ -352,51 +459,96 @@
         catch (e) { console.error('redirect-вхід:', e && e.code); }
       }
     });
-    logoutBtn.addEventListener('click', () => {
-      signOut(auth);
-    });
+    logoutBtn.addEventListener('click', () => signOut(auth));
 
-    // Обробка повернення після redirect-входу (важливо для iOS standalone)
     getRedirectResult(auth).catch(err => console.error('redirect:', err));
 
     onAuthStateChanged(auth, async user => {
+      currentUser = user;
       if (user) {
         loginScreen.style.display = 'none';
         logoutBtn.hidden = false;
+        shareBtn.hidden = false;
         await startForUser(user);
       } else {
         loginScreen.style.display = 'flex';
         logoutBtn.hidden = true;
-        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-        itemsCol = null;
-        items = [];
-        render();
+        shareBtn.hidden = true;
+        joinBanner.hidden = true;
+        if (unsubItems) { unsubItems(); unsubItems = null; }
+        if (unsubLists) { unsubLists(); unsubLists = null; }
+        itemsCol = null; activeListId = null; myLists = []; items = [];
+        renderPicker(); render();
       }
     });
 
     async function startForUser(user) {
-      const listRef = doc(db, 'lists', user.uid);
-      // Гарантуємо існування власного списку (учасник — лише ти).
-      // Етап 4: коли з'являться запрошені, members не можна перезаписувати — переробити.
+      // 1) Гарантуємо власний список — arrayUnion НЕ стирає вже доданих учасників.
       try {
-        await setDoc(listRef, { ownerId: user.uid, members: [user.uid] }, { merge: true });
-      } catch (e) { console.error('ensureList:', e); }
+        await setDoc(doc(db, 'lists', user.uid),
+          { ownerId: user.uid, ownerName: user.displayName || 'Без імені', members: arrayUnion(user.uid) },
+          { merge: true });
+      } catch (e) { console.error('ensureOwnList:', e); }
 
-      itemsCol = collection(db, 'lists', user.uid, 'items');
-      if (unsubscribe) unsubscribe();
-      unsubscribe = onSnapshot(query(itemsCol, orderBy('createdAt')),
-        snap => { items = snap.docs.map(d => ({ id: d.id, ...d.data() })); render(); },
-        err => console.error('onSnapshot:', err)
+      // 2) Банер запрошення, якщо прийшли за чужим посиланням
+      joinBanner.hidden = !pendingJoin || pendingJoin === user.uid;
+
+      // 3) Слухаємо всі списки, де я учасник
+      if (unsubLists) unsubLists();
+      unsubLists = onSnapshot(
+        query(collection(db, 'lists'), where('members', 'array-contains', user.uid)),
+        snap => {
+          myLists = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          renderPicker();
+          if (!activeListId || !myLists.some(l => l.id === activeListId)) {
+            const prefer =
+              (pendingJoin && myLists.some(l => l.id === pendingJoin)) ? pendingJoin :
+              (myLists.some(l => l.id === user.uid) ? user.uid :
+              (myLists[0] && myLists[0].id));
+            if (prefer) setActiveList(prefer);
+            else { items = []; render(); }
+          }
+        },
+        err => console.error('lists onSnapshot:', err)
       );
     }
 
-    // --- Дії: пишемо в хмару, realtime сам оновить UI на всіх пристроях ---
+    // --- Приєднання за посиланням ---
+    joinBtn.addEventListener('click', async () => {
+      if (!pendingJoin || !currentUser) return;
+      try {
+        await updateDoc(doc(db, 'lists', pendingJoin), { members: arrayUnion(currentUser.uid) });
+        const joined = pendingJoin;
+        pendingJoin = null;
+        joinBanner.hidden = true;
+        history.replaceState(null, '', location.pathname);
+        setActiveList(joined);
+      } catch (e) {
+        console.error('join:', e);
+        alert('Не вдалося приєднатися. Можливо, посилання застаріле або недійсне.');
+      }
+    });
+
+    // --- Поділитися списком ---
+    shareBtn.addEventListener('click', async () => {
+      if (!activeListId) return;
+      const url = location.origin + location.pathname + '?join=' + activeListId;
+      try {
+        if (navigator.share) {
+          await navigator.share({ title: 'Список покупок', text: 'Приєднуйся до спільного списку:', url });
+        } else {
+          await navigator.clipboard.writeText(url);
+          alert('Посилання скопійовано:\n' + url);
+        }
+      } catch (e) { /* користувач скасував — це нормально */ }
+    });
+
+    // --- Дії над пунктами ---
     async function addItem(text) {
       text = text.trim();
       if (!text || !itemsCol) return;
-      try {
-        await addDoc(itemsCol, { text, done: false, createdAt: serverTimestamp() });
-      } catch (e) { console.error('addItem:', e); }
+      try { await addDoc(itemsCol, { text, done: false, createdAt: serverTimestamp() }); }
+      catch (e) { console.error('addItem:', e); }
     }
 
     form.addEventListener('submit', e => {

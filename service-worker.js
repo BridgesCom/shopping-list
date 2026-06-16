@@ -1,5 +1,5 @@
 // Версію кешу міняй при кожному релізі (v1 -> v2), щоб iPhone підхопив оновлення.
-const CACHE = 'spysok-v4';
+const CACHE = 'spysok-v5';
 
 const ASSETS = [
   './',
