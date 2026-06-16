@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Список</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#4f46e5">
+
+  <!-- iOS standalone -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Список">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+
+  <style>
+    :root {
+      --accent: #4f46e5;
+      --bg: #f4f4f7;
+      --card: #ffffff;
+      --text: #1c1c22;
+      --muted: #8a8a96;
+      --line: #e6e6ec;
+      --danger: #e5484d;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f0f14;
+        --card: #1c1c24;
+        --text: #f2f2f5;
+        --muted: #8a8a96;
+        --line: #2a2a34;
+      }
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Хедер */
+    header {
+      background: var(--accent);
+      color: #fff;
+      padding: calc(env(safe-area-inset-top) + 14px) 18px 14px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: .2px; }
+
+    /* Форма додавання */
+    .add-bar {
+      display: flex;
+      gap: 10px;
+      padding: 14px 16px;
+      background: var(--card);
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: calc(env(safe-area-inset-top) + 50px);
+      z-index: 9;
+    }
+    .add-bar input {
+      flex: 1;
+      font-size: 17px;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--bg);
+      color: var(--text);
+      outline: none;
+    }
+    .add-bar input:focus { border-color: var(--accent); }
+    .add-bar button {
+      width: 50px;
+      border: none;
+      border-radius: 12px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 26px;
+      font-weight: 300;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .add-bar button:active { opacity: .8; }
+
+    /* Список */
+    main { flex: 1; padding: 8px 16px 16px; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--card);
+      border-radius: 14px;
+      padding: 15px 16px;
+      margin-top: 10px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .check {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 2px solid var(--line);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+    li.done .check {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .check svg { width: 15px; height: 15px; opacity: 0; }
+    li.done .check svg { opacity: 1; }
+    .label {
+      flex: 1;
+      font-size: 17px;
+      word-break: break-word;
+      cursor: pointer;
+    }
+    li.done .label { color: var(--muted); text-decoration: line-through; }
+    .del {
+      border: none;
+      background: none;
+      color: var(--muted);
+      font-size: 22px;
+      padding: 4px 6px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .del:active { color: var(--danger); }
+
+    /* Порожній стан */
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      margin-top: 60px;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+    .empty .big { font-size: 46px; display: block; margin-bottom: 10px; }
+
+    /* Підвал */
+    footer {
+      position: sticky;
+      bottom: 0;
+      background: var(--card);
+      border-top: 1px solid var(--line);
+      padding: 12px 18px calc(env(safe-area-inset-bottom) + 12px);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    footer button {
+      border: none;
+      background: none;
+      color: var(--accent);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 4px;
+    }
+    footer button:disabled { color: var(--muted); opacity: .5; }
+  </style>
+</head>
+<body>
+  <header><h1>🛒 Список</h1></header>
+
+  <form class="add-bar" id="addForm">
+    <input id="newItem" type="text" placeholder="Що купити?" autocomplete="off"
+           autocorrect="off" enterkeyhint="done">
+    <button type="submit" aria-label="Додати">+</button>
+  </form>
+
+  <main>
+    <ul id="list"></ul>
+    <div class="empty" id="empty">
+      <span class="big">📝</span>
+      Список порожній.<br>Додай перший пункт згори.
+    </div>
+  </main>
+
+  <footer>
+    <span id="counter">0 пунктів</span>
+    <button id="clearDone" disabled>Очистити куплене</button>
+  </footer>
+
+  <script>
+    const STORAGE_KEY = 'spysok.items.v1';
+    const listEl = document.getElementById('list');
+    const emptyEl = document.getElementById('empty');
+    const counterEl = document.getElementById('counter');
+    const clearBtn = document.getElementById('clearDone');
+    const form = document.getElementById('addForm');
+    const input = document.getElementById('newItem');
+
+    let items = load();
+
+    function load() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+      catch { return []; }
+    }
+    function save() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    }
+    function uid() {
+      return (self.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : String(Date.now()) + Math.random().toString(36).slice(2);
+    }
+
+    const CHECK_SVG =
+      '<svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" ' +
+      'stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    function render() {
+      listEl.innerHTML = '';
+      // невиконані згори, виконані внизу
+      const sorted = [...items].sort((a, b) => Number(a.done) - Number(b.done));
+      for (const it of sorted) {
+        const li = document.createElement('li');
+        li.className = it.done ? 'done' : '';
+        li.dataset.id = it.id;
+        li.innerHTML =
+          '<span class="check" data-act="toggle">' + CHECK_SVG + '</span>' +
+          '<span class="label" data-act="toggle"></span>' +
+          '<button class="del" data-act="del" aria-label="Видалити">&times;</button>';
+        li.querySelector('.label').textContent = it.text;
+        listEl.appendChild(li);
+      }
+      const total = items.length;
+      const done = items.filter(i => i.done).length;
+      emptyEl.style.display = total ? 'none' : 'block';
+      counterEl.textContent = total
+        ? (total + ' ' + plural(total) + ' · ' + done + ' куплено')
+        : '0 пунктів';
+      clearBtn.disabled = done === 0;
+    }
+
+    function plural(n) {
+      const m10 = n % 10, m100 = n % 100;
+      if (m10 === 1 && m100 !== 11) return 'пункт';
+      if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'пункти';
+      return 'пунктів';
+    }
+
+    function addItem(text) {
+      text = text.trim();
+      if (!text) return;
+      items.push({ id: uid(), text, done: false });
+      save(); render();
+    }
+
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      addItem(input.value);
+      input.value = '';
+      input.focus();
+    });
+
+    listEl.addEventListener('click', e => {
+      const actEl = e.target.closest('[data-act]');
+      if (!actEl) return;
+      const li = e.target.closest('li');
+      const id = li && li.dataset.id;
+      if (!id) return;
+      const act = actEl.dataset.act;
+      if (act === 'toggle') {
+        const it = items.find(i => i.id === id);
+        if (it) { it.done = !it.done; save(); render(); }
+      } else if (act === 'del') {
+        items = items.filter(i => i.id !== id);
+        save(); render();
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      items = items.filter(i => !i.done);
+      save(); render();
+    });
+
+    render();
+
+    // Реєстрація service worker (офлайн)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
